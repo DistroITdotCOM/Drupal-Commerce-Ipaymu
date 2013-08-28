@@ -1,0 +1,101 @@
+<?php
+
+function commerce_ipaymu_commerce_payment_method_info() {
+    $payment_methods = array();
+
+    $payment_methods['commerce_ipaymu'] = array(
+        'title' => t('Ipaymu'),
+        'short_title' => t('Ipaymu'),
+        'description' => t('Ipaymu Website Payments Standard'),
+        'terminal' => FALSE,
+        'offsite' => TRUE,
+        'offsite_autoredirect' => TRUE
+    );
+
+    return $payment_methods;
+}
+
+function commerce_ipaymu_settings_form($settings = array()) {
+    $form = array();
+
+    $form['api'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Ipaymu API'),
+        '#default_value' => $settings['api'],
+        '#required' => TRUE,
+    );
+    $form['business'] = array(
+        '#type' => 'textfield',
+        '#title' => t('PayPal e-mail address'),
+        '#description' => t('The primary e-mail address of the PayPal account you want to use to receive payments.'),
+        '#default_value' => $settings['business'],
+        '#required' => TRUE,
+    );
+    return $form;
+}
+
+function commerce_ipaymu_redirect_form($form, &$form_state, $order, $payment_method) {
+    $wrapper = entity_metadata_wrapper('commerce_order', $order);
+    $transaction = commerce_payment_transaction_new('commerce_ipaymu', $order->order_id);
+    $transaction->instance_id = $payment_method['instance_id'];
+    $transaction->amount = substr($wrapper->commerce_order_total->amount->value(), 0, strlen($wrapper->commerce_order_total->amount->value()) - 2);
+    $transaction->currency_code = $wrapper->commerce_order_total->currency_code->value();
+    $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+    $transaction->message = 'Name: @name';
+    $transaction->message_variables = array('@name' => 'testing');
+    commerce_payment_transaction_save($transaction);
+//    print_r($transaction);
+//    die();
+//        URL Payment IPAYMU
+    $url = 'https://my.ipaymu.com/payment.htm';
+
+//        Prepare Parameters
+    $params = array(
+        'key' => $payment_method['settings']['api'], // API Key Merchant / Penjual
+        'action' => 'payment',
+        'product' => 'Order number ' . $order->order_id,
+        'price' => substr($wrapper->commerce_order_total->amount->value(), 0, strlen($wrapper->commerce_order_total->amount->value()) - 2), // Total Harga
+        'quantity' => commerce_line_items_quantity($wrapper->commerce_line_items, commerce_product_line_item_types()),
+        'comments' => 'Keterangan Produk', // Optional           
+        'ureturn' => url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+        'unotify' => 'order/inotify',
+        'ucancel' => url('checkout/' . $order->order_id . '/payment/back/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+        /* Parameter untuk pembayaran lain menggunakan PayPal 
+         * ----------------------------------------------- */
+        'paypal_email' => $payment_method['settings']['business'],
+        'paypal_price' => 1, // Total harga dalam kurs USD
+        'invoice_number' => uniqid('INV-'), // Optional
+        /* ----------------------------------------------- */
+        'format' => 'json' // Format: xml / json. Default: xml 
+    );
+
+    $params_string = http_build_query($params);
+
+//        open connection
+    $ch = curl_init();
+
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_POST, count($params));
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $params_string);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, FALSE);
+
+//        execute post
+    $request = curl_exec($ch);
+
+    if ($request === false) {
+        echo 'Curl Error: ' . curl_error($ch);
+    } else {
+
+        $result = json_decode($request, true);
+
+        if (isset($result['url']))
+            header('location: ' . $result['url']);
+        else {
+            echo "Request Error " . $result['Status'] . ": " . $result['Keterangan'];
+        }
+    }
+
+//        close connection
+    curl_close($ch);
+}
